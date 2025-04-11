@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v2.0 step1</title>
+  <title>視野検査マッピングツール v2.0 step2</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -14,6 +14,7 @@
     };
   </script>
   <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
@@ -21,8 +22,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査マス切り出しテスト</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 step1 - 68マス画像切り出しのみ</p>
+  <h1>視野検査マスOCRテスト</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 step2 - 固定spacing & OCR対応</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -46,14 +47,14 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center, spacingX, spacingY } = detectCrossCenterWithScale(canvas);
-        drawGridPatches(canvas, center, spacingX, spacingY);
+        const center = detectCrossCenter(canvas);
+        drawAndOCRPatches(canvas, center);
       };
 
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCrossCenterWithScale(canvas) {
+    function detectCrossCenter(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
@@ -63,61 +64,82 @@
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
-      let verticalEdges = [], horizontalEdges = [];
-
       for (let i = 0; i < lines.rows; ++i) {
-        const line = lines.data32S.slice(i * 4, i * 4 + 4);
-        const [x1, y1, x2, y2] = line;
-        if (Math.abs(x1 - x2) < 10) {
-          verticals.push((x1 + x2) / 2);
-          verticalEdges.push(x1, x2);
-        }
-        if (Math.abs(y1 - y2) < 10) {
-          horizontals.push((y1 + y2) / 2);
-          horizontalEdges.push(y1, y2);
-        }
+        const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
+        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
+        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
       }
 
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
-      const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
-      const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
-
-      const minX = Math.min(...verticalEdges);
-      const maxX = Math.max(...verticalEdges);
-      const minY = Math.min(...horizontalEdges);
-      const maxY = Math.max(...horizontalEdges);
-
-      const spacingX = Math.round((maxX - minX) / 9);
-      const spacingY = Math.round((maxY - minY) / 9);
-
-      return { center: { x: centerX, y: centerY }, spacingX, spacingY };
+      return {
+        x: Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length),
+        y: Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length)
+      };
     }
 
-    function drawGridPatches(sourceCanvas, center, spacingX, spacingY) {
+    function isValidField(text) {
+      text = text.trim();
+      if (text === "<0") return true;
+      const splitText = text.split(/[^\d]/);
+      for (let part of splitText) {
+        const num = parseInt(part, 10);
+        if (!isNaN(num) && num >= 0 && num <= 50) return true;
+      }
+      return false;
+    }
+
+    function cleanText(text) {
+      text = text.trim();
+      if (text === "<0") return text;
+      const match = text.match(/\d{1,2}/);
+      if (match) {
+        const num = parseInt(match[0], 10);
+        if (!isNaN(num) && num >= 0 && num <= 50) return String(num);
+      }
+      return "";
+    }
+
+    async function drawAndOCRPatches(sourceCanvas, center) {
       const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
       const boxSize = 40;
+      const spacingX = 40;
+      const spacingY = 40;
       const previewContainer = document.getElementById("gridPreview");
       previewContainer.innerHTML = "";
 
       const sourceCtx = sourceCanvas.getContext("2d");
 
-      pattern.forEach((count, rowIndex) => {
+      for (let rowIndex = 0; rowIndex < pattern.length; rowIndex++) {
+        const count = pattern[rowIndex];
         const offsetY = (rowIndex - 5) * spacingY;
         const startX = -((count - 1) / 2) * spacingX;
+
         for (let i = 0; i < count; i++) {
           const offsetX = startX + i * spacingX;
           const x = center.x + offsetX - boxSize / 2;
           const y = center.y + offsetY - boxSize / 2;
 
-          const patch = document.createElement("canvas");
-          patch.width = boxSize;
-          patch.height = boxSize;
-          const patchCtx = patch.getContext("2d");
+          const patchCanvas = document.createElement("canvas");
+          patchCanvas.width = boxSize;
+          patchCanvas.height = boxSize;
+          const patchCtx = patchCanvas.getContext("2d");
           patchCtx.drawImage(sourceCanvas, x, y, boxSize, boxSize, 0, 0, boxSize, boxSize);
-          previewContainer.appendChild(patch);
+
+          const { data: { text } } = await Tesseract.recognize(patchCanvas, 'eng');
+          const cleaned = cleanText(text);
+
+          const label = document.createElement("div");
+          label.style.fontSize = "12px";
+          label.style.textAlign = "center";
+          label.innerText = cleaned;
+
+          const wrapper = document.createElement("div");
+          wrapper.appendChild(patchCanvas);
+          wrapper.appendChild(label);
+          previewContainer.appendChild(wrapper);
         }
-      });
+      }
     }
   </script>
 </body>
