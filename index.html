@@ -2,7 +2,17 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール</title>
+  <title>視野検査マッピングツール v1.2</title>
+  <script>
+    let opencvReady = false;
+    window.cv = window.cv || {};
+    window.Module = {
+      onRuntimeInitialized() {
+        console.log("✅ OpenCV.js 読み込み完了");
+        opencvReady = true;
+      }
+    };
+  </script>
   <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
@@ -17,16 +27,12 @@
 </head>
 <body>
   <h1>視野検査 自動マッピングツール</h1>
+  <p style="color: green;"><b>バージョン:</b> v1.2 - OpenCV読み込み安定対応 ✅</p>
+
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
 
   <script>
-    let opencvReady = false;
-    cv['onRuntimeInitialized'] = () => { 
-      console.log("✅ OpenCV.js 読み込み完了");
-      opencvReady = true; 
-    };
-
     document.getElementById("imageInput").addEventListener("change", function (event) {
       const file = event.target.files[0];
       if (!file) return;
@@ -34,7 +40,7 @@
       const img = new Image();
       img.onload = function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みがまだ完了していません。2〜3秒お待ちください。");
+          alert("OpenCV.js の読み込みがまだ完了していません。数秒お待ちください。");
           return;
         }
 
