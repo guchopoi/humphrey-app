@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v2.0 step2</title>
+  <title>視野検査マッピングツール v2.0 step3</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -18,12 +18,12 @@
   <style>
     body { font-family: sans-serif; padding: 20px; }
     .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
-    .grid-preview canvas { border: 1px solid #ccc; width: 40px; height: 40px; image-rendering: pixelated; }
+    .grid-preview canvas { border: 1px solid #ccc; width: 60px; height: 60px; image-rendering: pixelated; }
   </style>
 </head>
 <body>
   <h1>視野検査マスOCRテスト</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 step2 - 固定spacing & OCR対応</p>
+  <p style="color: green;"><b>バージョン:</b> v2.0 step3 - 自動スケーリング + OCR前二値化 ✅</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -47,14 +47,14 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const center = detectCrossCenter(canvas);
-        drawAndOCRPatches(canvas, center);
+        const { center, spacing } = detectCrossAndSpacing(canvas);
+        drawAndOCRPatches(canvas, center, spacing);
       };
 
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCrossCenter(canvas) {
+    function detectCrossAndSpacing(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
@@ -64,17 +64,31 @@
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
+      let verticalEdges = [], horizontalEdges = [];
+
       for (let i = 0; i < lines.rows; ++i) {
         const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
-        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
-        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
+        if (Math.abs(x1 - x2) < 10) {
+          verticals.push((x1 + x2) / 2);
+          verticalEdges.push(x1, x2);
+        }
+        if (Math.abs(y1 - y2) < 10) {
+          horizontals.push((y1 + y2) / 2);
+          horizontalEdges.push(y1, y2);
+        }
       }
 
-      src.delete(); gray.delete(); edges.delete(); lines.delete();
+      const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
+      const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
 
+      const minX = Math.min(...verticalEdges);
+      const maxX = Math.max(...verticalEdges);
+      const spacingX = Math.round((maxX - minX) / 9);
+
+      src.delete(); gray.delete(); edges.delete(); lines.delete();
       return {
-        x: Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length),
-        y: Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length)
+        center: { x: centerX, y: centerY },
+        spacing: spacingX
       };
     }
 
@@ -100,11 +114,9 @@
       return "";
     }
 
-    async function drawAndOCRPatches(sourceCanvas, center) {
+    async function drawAndOCRPatches(sourceCanvas, center, spacing) {
       const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const boxSize = 40;
-      const spacingX = 40;
-      const spacingY = 40;
+      const boxSize = Math.round(spacing * 1.4);
       const previewContainer = document.getElementById("gridPreview");
       previewContainer.innerHTML = "";
 
@@ -112,11 +124,11 @@
 
       for (let rowIndex = 0; rowIndex < pattern.length; rowIndex++) {
         const count = pattern[rowIndex];
-        const offsetY = (rowIndex - 5) * spacingY;
-        const startX = -((count - 1) / 2) * spacingX;
+        const offsetY = (rowIndex - 5) * spacing;
+        const startX = -((count - 1) / 2) * spacing;
 
         for (let i = 0; i < count; i++) {
-          const offsetX = startX + i * spacingX;
+          const offsetX = startX + i * spacing;
           const x = center.x + offsetX - boxSize / 2;
           const y = center.y + offsetY - boxSize / 2;
 
@@ -125,6 +137,16 @@
           patchCanvas.height = boxSize;
           const patchCtx = patchCanvas.getContext("2d");
           patchCtx.drawImage(sourceCanvas, x, y, boxSize, boxSize, 0, 0, boxSize, boxSize);
+
+          // 二値化処理
+          const imageData = patchCtx.getImageData(0, 0, boxSize, boxSize);
+          const data = imageData.data;
+          for (let j = 0; j < data.length; j += 4) {
+            const avg = (data[j] + data[j + 1] + data[j + 2]) / 3;
+            const val = avg < 128 ? 0 : 255;
+            data[j] = data[j + 1] = data[j + 2] = val;
+          }
+          patchCtx.putImageData(imageData, 0, 0);
 
           const { data: { text } } = await Tesseract.recognize(patchCanvas, 'eng');
           const cleaned = cleanText(text);
