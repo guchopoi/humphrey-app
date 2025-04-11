@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR v3.1 adaptive-spacing fix</title>
+  <title>視野検査OCR v3.1 adaptive-sizing</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR adaptive spacing（fix版）</h1>
-  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-spacing fix</p>
+  <h1>視野検査 OCR adaptive sizing</h1>
+  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-sizing（中心OCR → サイズ自動調整）</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -53,7 +53,7 @@
             alert("十字の中心が検出できませんでした。画像を確認してください。");
             return;
           }
-          estimateSpacingFromCenter(canvas, center);
+          estimateAdaptiveBoxSize(canvas, center);
         });
       };
       img.src = URL.createObjectURL(file);
@@ -82,7 +82,7 @@
       return { x: centerX, y: centerY };
     }
 
-    function estimateSpacingFromCenter(canvas, center) {
+    function estimateAdaptiveBoxSize(canvas, center) {
       const offset = 40;
       const positions = [
         { name: 'top', x: center.x, y: center.y - offset },
@@ -91,34 +91,37 @@
         { name: 'right', x: center.x + offset, y: center.y }
       ];
 
-      const boxSize = 40;
+      const baseSize = 50;
       const ocrPromises = positions.map(p => {
         const patch = document.createElement("canvas");
-        patch.width = patch.height = boxSize;
+        patch.width = patch.height = baseSize;
         const ctx = patch.getContext("2d");
-        ctx.drawImage(canvas, p.x - boxSize / 2, p.y - boxSize / 2, boxSize, boxSize, 0, 0, boxSize, boxSize);
+        ctx.drawImage(canvas, p.x - baseSize / 2, p.y - baseSize / 2, baseSize, baseSize, 0, 0, baseSize, baseSize);
 
         return Tesseract.recognize(patch, 'eng', {
           tessedit_char_whitelist: '<0123456789'
         }).then(({ data }) => {
-          const text = data.text.trim().match(/<0|\d{1,2}/);
-          return { name: p.name, x: p.x, y: p.y, text: text ? text[0] : "" };
+          const words = data.words.filter(w => w.text.trim().match(/<0|\d{1,2}/));
+          if (words.length > 0) {
+            const avgW = words.reduce((sum, w) => sum + (w.bbox.x1 - w.bbox.x0), 0) / words.length;
+            const avgH = words.reduce((sum, w) => sum + (w.bbox.y1 - w.bbox.y0), 0) / words.length;
+            return { name: p.name, x: p.x, y: p.y, width: avgW, height: avgH };
+          }
+          return null;
         });
       });
 
       Promise.all(ocrPromises).then(results => {
-        const top = results.find(r => r.name === 'top');
-        const bottom = results.find(r => r.name === 'bottom');
-        const left = results.find(r => r.name === 'left');
-        const right = results.find(r => r.name === 'right');
+        const valid = results.filter(r => r);
+        if (!valid.length) {
+          alert("中心近くの数字のサイズを取得できませんでした。画像を確認してください。");
+          return;
+        }
+        const avgW = Math.round(valid.reduce((sum, r) => sum + r.width, 0) / valid.length);
+        const avgH = Math.round(valid.reduce((sum, r) => sum + r.height, 0) / valid.length);
 
-        const spacingY = bottom && top ? Math.abs(bottom.y - top.y) : 40;
-        const spacingX = right && left ? Math.abs(right.x - left.x) : 40;
-
-        console.log("🔍 spacingX:", spacingX, "spacingY:", spacingY);
-        console.log("🔠 OCR中央近く：", results.map(r => `${r.name}: ${r.text}`).join(", "));
-
-        // TODO: ここからマス展開処理を行う
+        console.log("📏 推定boxサイズ：", avgW, "×", avgH);
+        // 次のステップ：このサイズで各マスを切り出す処理へ
       });
     }
   </script>
