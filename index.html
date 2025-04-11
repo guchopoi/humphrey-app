@@ -2,18 +2,147 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野等級判定アプリ</title>
+  <title>視野検査マッピングツール</title>
+  <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
-
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    input[type="text"] {
+      width: 40px;
+      text-align: center;
+    }
+    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
+    .input-row { display: flex; gap: 4px; }
+  </style>
 </head>
 <body>
-  <h1>Humphrey Visual Field Analyzer</h1>
+  <h1>視野検査 自動マッピングツール</h1>
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
 
-  <script src="script.js"></script>
-  <!-- OpenCV.jsを読み込む -->
-<script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
+  <script>
+    let opencvReady = false;
+    cv['onRuntimeInitialized'] = () => { opencvReady = true; };
 
+    document.getElementById("imageInput").addEventListener("change", function (event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const img = new Image();
+      img.onload = function () {
+        if (!opencvReady) {
+          alert("OpenCV.js の読み込みをお待ちください。");
+          return;
+        }
+
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0);
+
+        Tesseract.recognize(file, 'eng').then(({ data }) => {
+          const ocrWords = data.words.map(w => ({
+            text: w.text,
+            x: (w.bbox.x0 + w.bbox.x1) / 2,
+            y: (w.bbox.y0 + w.bbox.y1) / 2
+          }));
+
+          const center = detectCrossCenter(canvas);
+          ctx.fillStyle = "red";
+          ctx.beginPath();
+          ctx.arc(center.x, center.y, 10, 0, 2 * Math.PI);
+          ctx.fill();
+
+          const output = document.getElementById("output");
+          output.innerHTML = "<b>検出画像：</b><br>";
+          output.appendChild(canvas);
+
+          renderInputGrid();
+          processImageAndMap(center, ocrWords);
+        });
+      };
+
+      img.src = URL.createObjectURL(file);
+    });
+
+    function detectCrossCenter(canvas) {
+      const src = cv.imread(canvas);
+      const gray = new cv.Mat();
+      const edges = new cv.Mat();
+      const lines = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.Canny(gray, edges, 50, 150, 3, false);
+      cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
+
+      let verticals = [], horizontals = [];
+      for (let i = 0; i < lines.rows; ++i) {
+        const line = lines.data32S.slice(i * 4, i * 4 + 4);
+        const [x1, y1, x2, y2] = line;
+        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
+        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
+      }
+
+      src.delete(); gray.delete(); edges.delete(); lines.delete();
+      return {
+        x: Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length),
+        y: Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length)
+      };
+    }
+
+    function renderInputGrid() {
+      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+      const container = document.createElement("div");
+      container.className = "input-grid";
+      pattern.forEach((count, row) => {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "input-row";
+        for (let col = 0; col < count; col++) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.name = `v_${row}_${col}`;
+          rowDiv.appendChild(input);
+        }
+        container.appendChild(rowDiv);
+      });
+      document.getElementById("output").appendChild(container);
+    }
+
+    function processImageAndMap(center, ocrWords) {
+      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+      const spacingX = 40;
+      const spacingY = 40;
+      const relativePositions = [];
+      pattern.forEach((count, rowIndex) => {
+        const offsetY = (rowIndex - 5) * spacingY;
+        const startX = -((count - 1) / 2) * spacingX;
+        for (let i = 0; i < count; i++) {
+          const offsetX = startX + i * spacingX;
+          relativePositions.push([center.x + offsetX, center.y + offsetY]);
+        }
+      });
+
+      const boxValues = relativePositions.map(([boxX, boxY]) => {
+        let minDist = Infinity;
+        let closestText = "";
+        ocrWords.forEach(({ text, x, y }) => {
+          const dist = Math.hypot(x - boxX, y - boxY);
+          if (dist < minDist) {
+            minDist = dist;
+            closestText = text;
+          }
+        });
+        return closestText;
+      });
+
+      let i = 0;
+      pattern.forEach((count, row) => {
+        for (let col = 0; col < count; col++) {
+          const input = document.querySelector(`input[name="v_${row}_${col}"]`);
+          if (input) input.value = boxValues[i++] || "";
+        }
+      });
+    }
+  </script>
 </body>
 </html>
