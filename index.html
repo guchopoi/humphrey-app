@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v2.0 step3</title>
+  <title>視野検査マッピングツール v2.0 step4</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -17,17 +17,17 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
-    .grid-preview canvas { border: 1px solid #ccc; width: 60px; height: 60px; image-rendering: pixelated; }
+    input[type="text"] { width: 40px; text-align: center; }
+    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
+    .input-row { display: flex; gap: 4px; }
   </style>
 </head>
 <body>
-  <h1>視野検査マスOCRテスト</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 step3 - 自動スケーリング + OCR前二値化 ✅</p>
+  <h1>視野検査 OCRマッピング</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 step4 - 範囲指定OCR＋マス最寄りマッチング</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
-  <div class="grid-preview" id="gridPreview"></div>
 
   <script>
     document.getElementById("imageInput").addEventListener("change", function (event) {
@@ -37,7 +37,7 @@
       const img = new Image();
       img.onload = function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みがまだ完了していません。数秒お待ちください。");
+          alert("OpenCV.js の読み込みがまだ完了していません。");
           return;
         }
 
@@ -47,14 +47,49 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center, spacing } = detectCrossAndSpacing(canvas);
-        drawAndOCRPatches(canvas, center, spacing);
+        const { center, spacingX, spacingY, bounds } = detectBounds(canvas);
+        renderInputGrid();
+
+        Tesseract.recognize(canvas, 'eng').then(({ data }) => {
+          const words = data.words
+            .map(w => ({
+              text: w.text.trim(),
+              x: (w.bbox.x0 + w.bbox.x1) / 2,
+              y: (w.bbox.y0 + w.bbox.y1) / 2
+            }))
+            .filter(({ x, y, text }) => x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom && isValidField(text));
+
+          const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+          let positions = [];
+          pattern.forEach((count, row) => {
+            const offsetY = (row - 5) * spacingY;
+            const startX = -((count - 1) / 2) * spacingX;
+            for (let col = 0; col < count; col++) {
+              const offsetX = startX + col * spacingX;
+              positions.push({ row, col, x: center.x + offsetX, y: center.y + offsetY });
+            }
+          });
+
+          positions.forEach(({ row, col, x, y }) => {
+            let minDist = Infinity;
+            let value = "";
+            words.forEach(({ text, x: wx, y: wy }) => {
+              const dist = Math.hypot(wx - x, wy - y);
+              if (dist < minDist) {
+                minDist = dist;
+                value = cleanText(text);
+              }
+            });
+            const input = document.querySelector(`input[name='v_${row}_${col}']`);
+            if (input) input.value = value;
+          });
+        });
       };
 
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCrossAndSpacing(canvas) {
+    function detectBounds(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
@@ -65,8 +100,7 @@
 
       let verticals = [], horizontals = [];
       let verticalEdges = [], horizontalEdges = [];
-
-      for (let i = 0; i < lines.rows; ++i) {
+      for (let i = 0; i < lines.rows; i++) {
         const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
         if (Math.abs(x1 - x2) < 10) {
           verticals.push((x1 + x2) / 2);
@@ -78,90 +112,54 @@
         }
       }
 
+      src.delete(); gray.delete(); edges.delete(); lines.delete();
+
       const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
-
       const minX = Math.min(...verticalEdges);
       const maxX = Math.max(...verticalEdges);
+      const minY = Math.min(...horizontalEdges);
+      const maxY = Math.max(...horizontalEdges);
       const spacingX = Math.round((maxX - minX) / 9);
+      const spacingY = Math.round((maxY - minY) / 9);
 
-      src.delete(); gray.delete(); edges.delete(); lines.delete();
       return {
         center: { x: centerX, y: centerY },
-        spacing: spacingX
+        spacingX,
+        spacingY,
+        bounds: { left: minX, right: maxX, top: minY, bottom: maxY }
       };
     }
 
     function isValidField(text) {
-      text = text.trim();
       if (text === "<0") return true;
-      const splitText = text.split(/[^\d]/);
-      for (let part of splitText) {
-        const num = parseInt(part, 10);
-        if (!isNaN(num) && num >= 0 && num <= 50) return true;
-      }
-      return false;
+      const num = parseInt(text, 10);
+      return !isNaN(num) && num >= 0 && num <= 50;
     }
 
     function cleanText(text) {
       text = text.trim();
       if (text === "<0") return text;
       const match = text.match(/\d{1,2}/);
-      if (match) {
-        const num = parseInt(match[0], 10);
-        if (!isNaN(num) && num >= 0 && num <= 50) return String(num);
-      }
-      return "";
+      return match ? match[0] : "";
     }
 
-    async function drawAndOCRPatches(sourceCanvas, center, spacing) {
+    function renderInputGrid() {
       const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const boxSize = Math.round(spacing * 1.4);
-      const previewContainer = document.getElementById("gridPreview");
-      previewContainer.innerHTML = "";
-
-      const sourceCtx = sourceCanvas.getContext("2d");
-
-      for (let rowIndex = 0; rowIndex < pattern.length; rowIndex++) {
-        const count = pattern[rowIndex];
-        const offsetY = (rowIndex - 5) * spacing;
-        const startX = -((count - 1) / 2) * spacing;
-
-        for (let i = 0; i < count; i++) {
-          const offsetX = startX + i * spacing;
-          const x = center.x + offsetX - boxSize / 2;
-          const y = center.y + offsetY - boxSize / 2;
-
-          const patchCanvas = document.createElement("canvas");
-          patchCanvas.width = boxSize;
-          patchCanvas.height = boxSize;
-          const patchCtx = patchCanvas.getContext("2d");
-          patchCtx.drawImage(sourceCanvas, x, y, boxSize, boxSize, 0, 0, boxSize, boxSize);
-
-          // 二値化処理
-          const imageData = patchCtx.getImageData(0, 0, boxSize, boxSize);
-          const data = imageData.data;
-          for (let j = 0; j < data.length; j += 4) {
-            const avg = (data[j] + data[j + 1] + data[j + 2]) / 3;
-            const val = avg < 128 ? 0 : 255;
-            data[j] = data[j + 1] = data[j + 2] = val;
-          }
-          patchCtx.putImageData(imageData, 0, 0);
-
-          const { data: { text } } = await Tesseract.recognize(patchCanvas, 'eng');
-          const cleaned = cleanText(text);
-
-          const label = document.createElement("div");
-          label.style.fontSize = "12px";
-          label.style.textAlign = "center";
-          label.innerText = cleaned;
-
-          const wrapper = document.createElement("div");
-          wrapper.appendChild(patchCanvas);
-          wrapper.appendChild(label);
-          previewContainer.appendChild(wrapper);
+      const container = document.createElement("div");
+      container.className = "input-grid";
+      pattern.forEach((count, row) => {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "input-row";
+        for (let col = 0; col < count; col++) {
+          const input = document.createElement("input");
+          input.type = "text";
+          input.name = `v_${row}_${col}`;
+          rowDiv.appendChild(input);
         }
-      }
+        container.appendChild(rowDiv);
+      });
+      document.getElementById("output").appendChild(container);
     }
   </script>
 </body>
