@@ -22,7 +22,10 @@
 
   <script>
     let opencvReady = false;
-    cv['onRuntimeInitialized'] = () => { opencvReady = true; };
+    cv['onRuntimeInitialized'] = () => { 
+      console.log("✅ OpenCV.js 読み込み完了");
+      opencvReady = true; 
+    };
 
     document.getElementById("imageInput").addEventListener("change", function (event) {
       const file = event.target.files[0];
@@ -31,7 +34,7 @@
       const img = new Image();
       img.onload = function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みをお待ちください。");
+          alert("OpenCV.js の読み込みがまだ完了していません。2〜3秒お待ちください。");
           return;
         }
 
