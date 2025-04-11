@@ -2,139 +2,102 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>視野検査 数字読み取り Final</title>
-  <script>
-    let opencvReady = false;
-    window.cv = window.cv || {};
-    window.Module = {
-      onRuntimeInitialized() {
-        console.log("✅ OpenCV.js 読み込み完了");
-        opencvReady = true;
-      }
-    };
-  </script>
-  <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
+  <title>視野検査 OCR カメラガイド</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; }
-    .input-grid { display: flex; flex-direction: column; gap: 6px; align-items: center; margin-top: 20px; }
-    .input-row { display: flex; gap: 6px; }
-    input[type="text"] { width: 40px; height: 40px; text-align: center; font-size: 16px; }
+    body { margin: 0; font-family: sans-serif; background: #000; color: #fff; text-align: center; }
+    video { width: 100vw; height: auto; transform: scaleX(-1); }
+    .overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      pointer-events: none;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .grid {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .grid-row {
+      display: flex;
+      justify-content: center;
+      gap: 2px;
+    }
+    .grid-cell {
+      width: 24px;
+      height: 24px;
+      border: 1px solid rgba(255, 0, 0, 0.6);
+    }
+    #controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 18px;
+      margin: 10px;
+    }
   </style>
 </head>
 <body>
-  <h2>視野検査 数字OCR（68マス完全自動）</h2>
-  <input type="file" id="imageInput" accept="image/*">
-  <div id="output"></div>
+  <video id="video" autoplay playsinline muted></video>
+  <div class="overlay">
+    <div class="grid" id="grid">
+      <!-- JavaScriptで視野パターン生成 -->
+    </div>
+  </div>
+  <div id="controls">
+    <button id="capture">写真を撮る</button>
+    <canvas id="canvas" style="display: none;"></canvas>
+  </div>
 
   <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const captureButton = document.getElementById('capture');
+    const grid = document.getElementById('grid');
+
+    // 視野パターン（段ごとのセル数）
     const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
 
-    document.getElementById("imageInput").addEventListener("change", async function (event) {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      const img = new Image();
-      img.onload = async function () {
-        if (!opencvReady) {
-          alert("OpenCVの準備ができていません");
-          return;
-        }
-
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-
-        requestAnimationFrame(async () => {
-          const center = detectCrossCenter(canvas);
-          if (!center) {
-            alert("十字の中心が検出できませんでした。");
-            return;
-          }
-
-          const spacing = 80; // spacing固定（もしくは後で自動推定）
-          const boxSize = 60; // 切り出しサイズ（padding込み）
-
-          const grid = document.createElement("div");
-          grid.className = "input-grid";
-          let rowIndex = 0;
-          const promises = [];
-
-          pattern.forEach(count => {
-            const row = document.createElement("div");
-            row.className = "input-row";
-            const offsetY = (rowIndex - 5) * spacing;
-            const startX = -((count - 1) / 2) * spacing;
-
-            for (let col = 0; col < count; col++) {
-              const offsetX = startX + col * spacing;
-              const cx = center.x + offsetX;
-              const cy = center.y + offsetY;
-
-              const patch = document.createElement("canvas");
-              patch.width = patch.height = boxSize;
-              const patchCtx = patch.getContext("2d");
-              patchCtx.drawImage(canvas, cx - boxSize / 2, cy - boxSize / 2, boxSize, boxSize, 0, 0, boxSize, boxSize);
-
-              // 二値化でOCR精度UP
-              const imageData = patchCtx.getImageData(0, 0, boxSize, boxSize);
-              const data = imageData.data;
-              for (let i = 0; i < data.length; i += 4) {
-                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
-                const bin = avg < 160 ? 0 : 255;
-                data[i] = data[i + 1] = data[i + 2] = bin;
-              }
-              patchCtx.putImageData(imageData, 0, 0);
-
-              const input = document.createElement("input");
-              input.type = "text";
-              row.appendChild(input);
-
-              const p = Tesseract.recognize(patch, 'eng', {
-                tessedit_char_whitelist: '<0123456789'
-              }).then(({ data }) => {
-                const match = data.text.match(/<0|\d{1,2}/);
-                if (match) input.value = match[0];
-              });
-              promises.push(p);
-            }
-            rowIndex++;
-            grid.appendChild(row);
-          });
-
-          document.getElementById("output").innerHTML = "";
-          document.getElementById("output").appendChild(grid);
-          await Promise.all(promises);
-          console.log("✅ 全OCR完了");
-        });
-      };
-      img.src = URL.createObjectURL(file);
+    // ガイド生成
+    pattern.forEach(cellCount => {
+      const row = document.createElement('div');
+      row.className = 'grid-row';
+      for (let i = 0; i < cellCount; i++) {
+        const cell = document.createElement('div');
+        cell.className = 'grid-cell';
+        row.appendChild(cell);
+      }
+      grid.appendChild(row);
     });
 
-    function detectCrossCenter(canvas) {
-      const src = cv.imread(canvas);
-      const gray = new cv.Mat();
-      const edges = new cv.Mat();
-      const lines = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      cv.Canny(gray, edges, 50, 150);
-      cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
+    // カメラ起動
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+      .then(stream => {
+        video.srcObject = stream;
+      })
+      .catch(err => {
+        alert("カメラの使用に失敗しました: " + err);
+      });
 
-      let verticals = [], horizontals = [];
-      for (let i = 0; i < lines.rows; i++) {
-        const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
-        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
-        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
-      }
-      src.delete(); gray.delete(); edges.delete(); lines.delete();
-
-      if (!verticals.length || !horizontals.length) return null;
-      const cx = verticals.reduce((a, b) => a + b, 0) / verticals.length;
-      const cy = horizontals.reduce((a, b) => a + b, 0) / horizontals.length;
-      return { x: cx, y: cy };
-    }
+    // 撮影
+    captureButton.addEventListener('click', () => {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1); // ミラー補正
+      ctx.drawImage(video, 0, 0);
+      const dataURL = canvas.toDataURL();
+      alert("撮影完了。今後ここにOCR処理を追加します。");
+    });
   </script>
 </body>
 </html>
