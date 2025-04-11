@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR：画像配置復元</title>
+  <title>視野検査OCR：正確マス配置</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR 切り出し配置</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 layout-replica</p>
+  <h1>視野検査 OCR マス対応配置</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched（位置マッチ）</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -47,7 +47,18 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center } = detectCenterOnly(canvas);
+        const { center, spacingX, spacingY } = detectCenterAndSpacing(canvas);
+
+        const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+        const positions = [];
+        pattern.forEach((count, row) => {
+          const offsetY = (row - 5) * spacingY;
+          const startX = -((count - 1) / 2) * spacingX;
+          for (let col = 0; col < count; col++) {
+            const offsetX = startX + col * spacingX;
+            positions.push({ row, col, x: center.x + offsetX, y: center.y + offsetY });
+          }
+        });
 
         Tesseract.recognize(canvas, 'eng').then(({ data }) => {
           const words = data.words.map(w => ({
@@ -60,19 +71,28 @@
             y1: w.bbox.y1
           }));
 
-          const sorted = words.sort((a, b) => {
-            const da = Math.hypot(a.x - center.x, a.y - center.y);
-            const db = Math.hypot(b.x - center.x, b.y - center.y);
-            return da - db;
-          }).slice(0, 68);
+          const matched = positions.map(pos => {
+            let best = null;
+            let minScore = Infinity;
+            words.forEach(word => {
+              const dx = Math.abs(word.x - pos.x);
+              const dy = Math.abs(word.y - pos.y);
+              const score = dx + dy; // Manhattan距離でマスに最も近い文字
+              if (score < minScore) {
+                minScore = score;
+                best = word;
+              }
+            });
+            return best;
+          });
 
-          renderImageGrid(sorted, canvas);
+          renderImageGrid(matched, pattern);
         });
       };
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCenterOnly(canvas) {
+    function detectCenterAndSpacing(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
@@ -82,39 +102,52 @@
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
+      let verticalEdges = [], horizontalEdges = [];
       for (let i = 0; i < lines.rows; i++) {
         const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
-        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
-        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
+        if (Math.abs(x1 - x2) < 10) {
+          verticals.push((x1 + x2) / 2);
+          verticalEdges.push(x1, x2);
+        }
+        if (Math.abs(y1 - y2) < 10) {
+          horizontals.push((y1 + y2) / 2);
+          horizontalEdges.push(y1, y2);
+        }
       }
 
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
       const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
+      const minX = Math.min(...verticalEdges);
+      const maxX = Math.max(...verticalEdges);
+      const minY = Math.min(...horizontalEdges);
+      const maxY = Math.max(...horizontalEdges);
 
-      return { center: { x: centerX, y: centerY } };
+      const spacingX = Math.round((maxX - minX) / 9);
+      const spacingY = Math.round((maxY - minY) / 9);
+
+      return { center: { x: centerX, y: centerY }, spacingX, spacingY };
     }
 
-    function renderImageGrid(sortedWords, canvas) {
-      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+    function renderImageGrid(matched, pattern) {
       const container = document.createElement("div");
       container.className = "input-grid";
 
-      let i = 0;
+      let index = 0;
       pattern.forEach((count, rowIdx) => {
         const row = document.createElement("div");
         row.className = "input-row";
-        for (let j = 0; j < count; j++) {
-          if (i >= sortedWords.length) break;
-          const { x0, y0, x1, y1 } = sortedWords[i++];
-          const w = x1 - x0;
-          const h = y1 - y0;
+        for (let colIdx = 0; colIdx < count; colIdx++) {
+          const word = matched[index++];
+          if (!word || !word.text) continue;
+          const w = word.x1 - word.x0;
+          const h = word.y1 - word.y0;
           const patch = document.createElement("canvas");
           patch.width = w;
           patch.height = h;
           const ctx = patch.getContext("2d");
-          ctx.drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
+          ctx.drawImage(document.querySelector("canvas"), word.x0, word.y0, w, h, 0, 0, w, h);
           row.appendChild(patch);
         }
         container.appendChild(row);
