@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v1.2</title>
+  <title>視野検査マッピングツール v1.3</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -27,7 +27,7 @@
 </head>
 <body>
   <h1>視野検査 自動マッピングツール</h1>
-  <p style="color: green;"><b>バージョン:</b> v1.2 - OpenCV読み込み安定対応 ✅</p>
+  <p style="color: green;"><b>バージョン:</b> v1.3 - 不正OCR文字フィルタ適用 ✅</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -99,6 +99,12 @@
       };
     }
 
+    function isValidField(text) {
+      if (text.trim() === "<0") return true;
+      const num = parseInt(text, 10);
+      return !isNaN(num) && num >= 0 && num <= 50;
+    }
+
     function renderInputGrid() {
       const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
       const container = document.createElement("div");
@@ -135,6 +141,7 @@
         let minDist = Infinity;
         let closestText = "";
         ocrWords.forEach(({ text, x, y }) => {
+          if (!isValidField(text)) return;
           const dist = Math.hypot(x - boxX, y - boxY);
           if (dist < minDist) {
             minDist = dist;
