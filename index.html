@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR：中心距離順画像表示</title>
+  <title>視野検査OCR：画像配置復元</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -17,16 +17,17 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
-    .grid-preview canvas { border: 1px solid #ccc; width: 50px; height: 50px; image-rendering: pixelated; }
+    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
+    .input-row { display: flex; gap: 4px; }
+    .input-row canvas { border: 1px solid #ccc; width: 50px; height: 50px; image-rendering: pixelated; }
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR中心距離順 画像化</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 center-distance sort</p>
+  <h1>視野検査 OCR 切り出し配置</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 layout-replica</p>
 
   <input type="file" id="imageInput" accept="image/*">
-  <div id="gridPreview" class="grid-preview"></div>
+  <div id="output"></div>
 
   <script>
     document.getElementById("imageInput").addEventListener("change", function (event) {
@@ -63,24 +64,11 @@
             const da = Math.hypot(a.x - center.x, a.y - center.y);
             const db = Math.hypot(b.x - center.x, b.y - center.y);
             return da - db;
-          });
+          }).slice(0, 68);
 
-          const previewContainer = document.getElementById("gridPreview");
-          previewContainer.innerHTML = "";
-
-          sorted.slice(0, 68).forEach(({ text, x0, y0, x1, y1 }) => {
-            const w = x1 - x0;
-            const h = y1 - y0;
-            const patchCanvas = document.createElement("canvas");
-            patchCanvas.width = w;
-            patchCanvas.height = h;
-            const patchCtx = patchCanvas.getContext("2d");
-            patchCtx.drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
-            previewContainer.appendChild(patchCanvas);
-          });
+          renderImageGrid(sorted, canvas);
         });
       };
-
       img.src = URL.createObjectURL(file);
     });
 
@@ -106,6 +94,33 @@
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
 
       return { center: { x: centerX, y: centerY } };
+    }
+
+    function renderImageGrid(sortedWords, canvas) {
+      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+      const container = document.createElement("div");
+      container.className = "input-grid";
+
+      let i = 0;
+      pattern.forEach((count, rowIdx) => {
+        const row = document.createElement("div");
+        row.className = "input-row";
+        for (let j = 0; j < count; j++) {
+          if (i >= sortedWords.length) break;
+          const { x0, y0, x1, y1 } = sortedWords[i++];
+          const w = x1 - x0;
+          const h = y1 - y0;
+          const patch = document.createElement("canvas");
+          patch.width = w;
+          patch.height = h;
+          const ctx = patch.getContext("2d");
+          ctx.drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
+          row.appendChild(patch);
+        }
+        container.appendChild(row);
+      });
+      document.getElementById("output").innerHTML = "";
+      document.getElementById("output").appendChild(container);
     }
   </script>
 </body>
