@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR：正確マス配置（修正版）</title>
+  <title>視野検査OCR：マス割り当て強化版</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR マス対応配置（修正版）</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched fix</p>
+  <h1>視野検査 OCR マス対応配置（完全修正版）</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched unique+split</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -61,29 +61,38 @@
         });
 
         Tesseract.recognize(canvas, 'eng').then(({ data }) => {
-          const words = data.words.map(w => ({
-            text: w.text.trim(),
-            x: (w.bbox.x0 + w.bbox.x1) / 2,
-            y: (w.bbox.y0 + w.bbox.y1) / 2,
-            x0: w.bbox.x0,
-            y0: w.bbox.y0,
-            x1: w.bbox.x1,
-            y1: w.bbox.y1
-          }));
+          const splitWords = [];
+          data.words.forEach(w => {
+            const parts = w.text.trim().split(/[^0-9<]+/).filter(p => /^\d{1,2}$|^<0$/.test(p));
+            parts.forEach(part => {
+              splitWords.push({
+                text: part,
+                x: (w.bbox.x0 + w.bbox.x1) / 2,
+                y: (w.bbox.y0 + w.bbox.y1) / 2,
+                x0: w.bbox.x0,
+                y0: w.bbox.y0,
+                x1: w.bbox.x1,
+                y1: w.bbox.y1
+              });
+            });
+          });
 
+          const used = new Set();
           const matched = positions.map(pos => {
             let best = null;
             let minScore = Infinity;
-            words.forEach(word => {
+            splitWords.forEach((word, idx) => {
+              if (used.has(idx)) return;
               const dx = Math.abs(word.x - pos.x);
               const dy = Math.abs(word.y - pos.y);
               const score = dx + dy;
               if (score < minScore) {
                 minScore = score;
-                best = word;
+                best = { word, idx };
               }
             });
-            return best;
+            if (best) used.add(best.idx);
+            return best ? best.word : null;
           });
 
           renderImageGrid(matched, pattern, canvas);
@@ -140,14 +149,18 @@
         row.className = "input-row";
         for (let colIdx = 0; colIdx < count; colIdx++) {
           const word = matched[index++];
-          if (!word || !word.text) continue;
-          const w = word.x1 - word.x0;
-          const h = word.y1 - word.y0;
           const patch = document.createElement("canvas");
-          patch.width = w;
-          patch.height = h;
+          patch.width = 50;
+          patch.height = 50;
           const ctx = patch.getContext("2d");
-          ctx.drawImage(sourceCanvas, word.x0, word.y0, w, h, 0, 0, w, h);
+          if (word) {
+            const w = word.x1 - word.x0;
+            const h = word.y1 - word.y0;
+            ctx.drawImage(sourceCanvas, word.x0, word.y0, w, h, 0, 0, 50, 50);
+          } else {
+            ctx.fillStyle = "#eee";
+            ctx.fillRect(0, 0, 50, 50);
+          }
           row.appendChild(patch);
         }
         container.appendChild(row);
