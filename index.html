@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v2.0 step4</title>
+  <title>視野検査マッピングツール v2.0 step5</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -24,7 +24,7 @@
 </head>
 <body>
   <h1>視野検査 OCRマッピング</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 step4 - 範囲指定OCR＋マス最寄りマッチング</p>
+  <p style="color: green;"><b>バージョン:</b> v2.0 step5 - 白黒化＋文字制限＋不正除去</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -50,14 +50,19 @@
         const { center, spacingX, spacingY, bounds } = detectBounds(canvas);
         renderInputGrid();
 
-        Tesseract.recognize(canvas, 'eng').then(({ data }) => {
+        const binarized = binarizeCanvas(canvas);
+
+        Tesseract.recognize(binarized, 'eng', {
+          tessedit_char_whitelist: '<0123456789'
+        }).then(({ data }) => {
           const words = data.words
             .map(w => ({
               text: w.text.trim(),
               x: (w.bbox.x0 + w.bbox.x1) / 2,
-              y: (w.bbox.y0 + w.bbox.y1) / 2
+              y: (w.bbox.y0 + w.bbox.y1) / 2,
+              confidence: w.confidence
             }))
-            .filter(({ x, y, text }) => x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom && isValidField(text));
+            .filter(({ x, y, text, confidence }) => x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom && confidence > 70 && isValidField(text));
 
           const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
           let positions = [];
@@ -127,14 +132,30 @@
         center: { x: centerX, y: centerY },
         spacingX,
         spacingY,
-        bounds: { left: minX, right: maxX, top: minY, bottom: maxY }
+        bounds: {
+          left: minX - spacingX,
+          right: maxX + spacingX,
+          top: minY - spacingY,
+          bottom: maxY + spacingY
+        }
       };
     }
 
+    function binarizeCanvas(canvas) {
+      const ctx = canvas.getContext("2d");
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+        const val = avg < 128 ? 0 : 255;
+        data[i] = data[i + 1] = data[i + 2] = val;
+      }
+      ctx.putImageData(imageData, 0, 0);
+      return canvas;
+    }
+
     function isValidField(text) {
-      if (text === "<0") return true;
-      const num = parseInt(text, 10);
-      return !isNaN(num) && num >= 0 && num <= 50;
+      return text === "<0" || (/^\d{1,2}$/.test(text) && parseInt(text) <= 50);
     }
 
     function cleanText(text) {
