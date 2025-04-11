@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査マッピングツール v1.4</title>
+  <title>視野検査マッピングツール v2.0 step1</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -14,23 +14,19 @@
     };
   </script>
   <script async src="https://docs.opencv.org/4.5.5/opencv.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    input[type="text"] {
-      width: 40px;
-      text-align: center;
-    }
-    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
-    .input-row { display: flex; gap: 4px; }
+    .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
+    .grid-preview canvas { border: 1px solid #ccc; width: 40px; height: 40px; image-rendering: pixelated; }
   </style>
 </head>
 <body>
-  <h1>視野検査 自動マッピングツール</h1>
-  <p style="color: green;"><b>バージョン:</b> v1.4 - 十字端点から自動スケーリング対応 ✅</p>
+  <h1>視野検査マス切り出しテスト</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 step1 - 68マス画像切り出しのみ</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
+  <div class="grid-preview" id="gridPreview"></div>
 
   <script>
     document.getElementById("imageInput").addEventListener("change", function (event) {
@@ -50,27 +46,8 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        Tesseract.recognize(file, 'eng').then(({ data }) => {
-          const ocrWords = data.words.map(w => ({
-            text: w.text,
-            x: (w.bbox.x0 + w.bbox.x1) / 2,
-            y: (w.bbox.y0 + w.bbox.y1) / 2
-          }));
-
-          const { center, spacingX, spacingY } = detectCrossCenterWithScale(canvas);
-
-          ctx.fillStyle = "red";
-          ctx.beginPath();
-          ctx.arc(center.x, center.y, 10, 0, 2 * Math.PI);
-          ctx.fill();
-
-          const output = document.getElementById("output");
-          output.innerHTML = "<b>検出画像：</b><br>";
-          output.appendChild(canvas);
-
-          renderInputGrid();
-          processImageAndMap(center, spacingX, spacingY, ocrWords);
-        });
+        const { center, spacingX, spacingY } = detectCrossCenterWithScale(canvas);
+        drawGridPatches(canvas, center, spacingX, spacingY);
       };
 
       img.src = URL.createObjectURL(file);
@@ -111,83 +88,34 @@
       const minY = Math.min(...horizontalEdges);
       const maxY = Math.max(...horizontalEdges);
 
-      const spacingX = Math.round((maxX - minX) / 9); // 10マス幅 → 9間隔
-      const spacingY = Math.round((maxY - minY) / 9); // 10マス高 → 9間隔
+      const spacingX = Math.round((maxX - minX) / 9);
+      const spacingY = Math.round((maxY - minY) / 9);
 
       return { center: { x: centerX, y: centerY }, spacingX, spacingY };
     }
 
-    function isValidField(text) {
-      text = text.trim();
-      if (text === "<0") return true;
-      const splitText = text.split(/[^\d]/);
-      for (let part of splitText) {
-        const num = parseInt(part, 10);
-        if (!isNaN(num) && num >= 0 && num <= 50) return true;
-      }
-      return false;
-    }
-
-    function cleanText(text) {
-      text = text.trim();
-      if (text === "<0") return text;
-      const match = text.match(/\d{1,2}/);
-      if (match) {
-        const num = parseInt(match[0], 10);
-        if (!isNaN(num) && num >= 0 && num <= 50) return String(num);
-      }
-      return "";
-    }
-
-    function renderInputGrid() {
+    function drawGridPatches(sourceCanvas, center, spacingX, spacingY) {
       const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const container = document.createElement("div");
-      container.className = "input-grid";
-      pattern.forEach((count, row) => {
-        const rowDiv = document.createElement("div");
-        rowDiv.className = "input-row";
-        for (let col = 0; col < count; col++) {
-          const input = document.createElement("input");
-          input.type = "text";
-          input.name = `v_${row}_${col}`;
-          rowDiv.appendChild(input);
-        }
-        container.appendChild(rowDiv);
-      });
-      document.getElementById("output").appendChild(container);
-    }
+      const boxSize = 40;
+      const previewContainer = document.getElementById("gridPreview");
+      previewContainer.innerHTML = "";
 
-    function processImageAndMap(center, spacingX, spacingY, ocrWords) {
-      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const relativePositions = [];
+      const sourceCtx = sourceCanvas.getContext("2d");
+
       pattern.forEach((count, rowIndex) => {
         const offsetY = (rowIndex - 5) * spacingY;
         const startX = -((count - 1) / 2) * spacingX;
         for (let i = 0; i < count; i++) {
           const offsetX = startX + i * spacingX;
-          relativePositions.push([center.x + offsetX, center.y + offsetY]);
-        }
-      });
+          const x = center.x + offsetX - boxSize / 2;
+          const y = center.y + offsetY - boxSize / 2;
 
-      const boxValues = relativePositions.map(([boxX, boxY]) => {
-        let minDist = Infinity;
-        let closestText = "";
-        ocrWords.forEach(({ text, x, y }) => {
-          if (!isValidField(text)) return;
-          const dist = Math.hypot(x - boxX, y - boxY);
-          if (dist < minDist) {
-            minDist = dist;
-            closestText = cleanText(text);
-          }
-        });
-        return closestText;
-      });
-
-      let i = 0;
-      pattern.forEach((count, row) => {
-        for (let col = 0; col < count; col++) {
-          const input = document.querySelector(`input[name="v_${row}_${col}"]`);
-          if (input) input.value = boxValues[i++] || "";
+          const patch = document.createElement("canvas");
+          patch.width = boxSize;
+          patch.height = boxSize;
+          const patchCtx = patch.getContext("2d");
+          patchCtx.drawImage(sourceCanvas, x, y, boxSize, boxSize, 0, 0, boxSize, boxSize);
+          previewContainer.appendChild(patch);
         }
       });
     }
