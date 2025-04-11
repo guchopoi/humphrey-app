@@ -23,19 +23,47 @@ document.getElementById("imageInput").addEventListener("change", function(event)
     }));
 
     const grouped = groupByRows(cells);
-    const matrix = grouped.map(row =>
-      row.sort((a, b) => a.x - b.x).map(w => w.text)
-    );
+    const flatTexts = grouped
+      .map(row => row.sort((a, b) => a.x - b.x).map(w => w.text))
+      .flat(); // 一列にする
 
-    output.innerHTML += "<hr><b>OCRで読み取った数値（68点候補）：</b><br>";
-    output.innerHTML += `<pre>${JSON.stringify(matrix, null, 2)}</pre>`;
+    const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2]; // 各行のセル数
+    let i = 0;
+
+    const inputArea = document.createElement("div");
+    inputArea.style.display = "flex";
+    inputArea.style.flexDirection = "column";
+    inputArea.style.gap = "4px";
+
+    for (let row = 0; row < pattern.length; row++) {
+      const rowDiv = document.createElement("div");
+      rowDiv.style.display = "flex";
+      rowDiv.style.justifyContent = "center";
+      rowDiv.style.gap = "4px";
+
+      for (let col = 0; col < pattern[row]; col++) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.value = flatTexts[i] || "";
+        input.size = 3;
+        input.style.textAlign = "center";
+        input.name = `v_${row}_${col}`;
+        i++;
+        rowDiv.appendChild(input);
+      }
+
+      inputArea.appendChild(rowDiv);
+    }
+
+    output.innerHTML += "<hr><b>修正可能な視野データ：</b><br>";
+    output.appendChild(inputArea);
   });
 });
 
-// Y座標が近いものを同じ行にまとめる
+// Y座標が近いものを同じ行にまとめる関数
 function groupByRows(cells) {
   const rows = [];
-  const threshold = 10; // Y座標の近さの許容値（px）
+  const threshold = 10; // Y座標差が10px以内なら同じ行とみなす
   cells.forEach(cell => {
     const row = rows.find(r => Math.abs(r[0].y - cell.y) < threshold);
     if (row) row.push(cell);
