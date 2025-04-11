@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR v3.2 full-grid</title>
+  <title>視野検査 数字読み取り Final</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -17,27 +17,27 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
-    .input-row { display: flex; gap: 4px; }
-    .input-row input { width: 40px; height: 40px; text-align: center; font-size: 16px; }
+    .input-grid { display: flex; flex-direction: column; gap: 6px; align-items: center; margin-top: 20px; }
+    .input-row { display: flex; gap: 6px; }
+    input[type="text"] { width: 40px; height: 40px; text-align: center; font-size: 16px; }
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR full-grid</h1>
-  <p style="color: green;"><b>バージョン:</b> v3.2 full-grid（推定サイズで全マスOCR）</p>
-
+  <h2>視野検査 数字OCR（68マス完全自動）</h2>
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
 
   <script>
-    document.getElementById("imageInput").addEventListener("change", function (event) {
+    const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+
+    document.getElementById("imageInput").addEventListener("change", async function (event) {
       const file = event.target.files[0];
       if (!file) return;
 
       const img = new Image();
-      img.onload = function () {
+      img.onload = async function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みがまだ完了していません。");
+          alert("OpenCVの準備ができていません");
           return;
         }
 
@@ -47,25 +47,79 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        requestAnimationFrame(() => {
-          const center = detectCenter(canvas);
+        requestAnimationFrame(async () => {
+          const center = detectCrossCenter(canvas);
           if (!center) {
-            alert("十字の中心が検出できませんでした。画像を確認してください。");
+            alert("十字の中心が検出できませんでした。");
             return;
           }
-          estimateAdaptiveBoxSize(canvas, center);
+
+          const spacing = 80; // spacing固定（もしくは後で自動推定）
+          const boxSize = 60; // 切り出しサイズ（padding込み）
+
+          const grid = document.createElement("div");
+          grid.className = "input-grid";
+          let rowIndex = 0;
+          const promises = [];
+
+          pattern.forEach(count => {
+            const row = document.createElement("div");
+            row.className = "input-row";
+            const offsetY = (rowIndex - 5) * spacing;
+            const startX = -((count - 1) / 2) * spacing;
+
+            for (let col = 0; col < count; col++) {
+              const offsetX = startX + col * spacing;
+              const cx = center.x + offsetX;
+              const cy = center.y + offsetY;
+
+              const patch = document.createElement("canvas");
+              patch.width = patch.height = boxSize;
+              const patchCtx = patch.getContext("2d");
+              patchCtx.drawImage(canvas, cx - boxSize / 2, cy - boxSize / 2, boxSize, boxSize, 0, 0, boxSize, boxSize);
+
+              // 二値化でOCR精度UP
+              const imageData = patchCtx.getImageData(0, 0, boxSize, boxSize);
+              const data = imageData.data;
+              for (let i = 0; i < data.length; i += 4) {
+                const avg = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                const bin = avg < 160 ? 0 : 255;
+                data[i] = data[i + 1] = data[i + 2] = bin;
+              }
+              patchCtx.putImageData(imageData, 0, 0);
+
+              const input = document.createElement("input");
+              input.type = "text";
+              row.appendChild(input);
+
+              const p = Tesseract.recognize(patch, 'eng', {
+                tessedit_char_whitelist: '<0123456789'
+              }).then(({ data }) => {
+                const match = data.text.match(/<0|\d{1,2}/);
+                if (match) input.value = match[0];
+              });
+              promises.push(p);
+            }
+            rowIndex++;
+            grid.appendChild(row);
+          });
+
+          document.getElementById("output").innerHTML = "";
+          document.getElementById("output").appendChild(grid);
+          await Promise.all(promises);
+          console.log("✅ 全OCR完了");
         });
       };
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCenter(canvas) {
+    function detectCrossCenter(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
       const lines = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      cv.Canny(gray, edges, 50, 150, 3, false);
+      cv.Canny(gray, edges, 50, 150);
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
@@ -77,101 +131,9 @@
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
       if (!verticals.length || !horizontals.length) return null;
-      const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
-      const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
-      return { x: centerX, y: centerY };
-    }
-
-    function estimateAdaptiveBoxSize(canvas, center) {
-      const offset = 40;
-      const positions = [
-        { name: 'top', x: center.x, y: center.y - offset },
-        { name: 'bottom', x: center.x, y: center.y + offset },
-        { name: 'left', x: center.x - offset, y: center.y },
-        { name: 'right', x: center.x + offset, y: center.y }
-      ];
-
-      const baseSize = 50;
-      const ocrPromises = positions.map(p => {
-        const patch = document.createElement("canvas");
-        patch.width = patch.height = baseSize;
-        const ctx = patch.getContext("2d");
-        ctx.drawImage(canvas, p.x - baseSize / 2, p.y - baseSize / 2, baseSize, baseSize, 0, 0, baseSize, baseSize);
-
-        return Tesseract.recognize(patch, 'eng', {
-          tessedit_char_whitelist: '<0123456789'
-        }).then(({ data }) => {
-          const words = data.words.filter(w => w.text.trim().match(/<0|\d{1,2}/));
-          if (words.length > 0) {
-            const avgW = words.reduce((sum, w) => sum + (w.bbox.x1 - w.bbox.x0), 0) / words.length;
-            const avgH = words.reduce((sum, w) => sum + (w.bbox.y1 - w.bbox.y0), 0) / words.length;
-            return { name: p.name, x: p.x, y: p.y, width: avgW, height: avgH };
-          }
-          return null;
-        });
-      });
-
-      Promise.all(ocrPromises).then(results => {
-        const valid = results.filter(r => r);
-        if (!valid.length) {
-          alert("中心近くの数字のサイズを取得できませんでした。画像を確認してください。");
-          return;
-        }
-        const avgW = Math.round(valid.reduce((sum, r) => sum + r.width, 0) / valid.length);
-        const avgH = Math.round(valid.reduce((sum, r) => sum + r.height, 0) / valid.length);
-
-        console.log("📏 推定boxサイズ：", avgW, "×", avgH);
-        runFullGridOCR(canvas, center, avgW, avgH);
-      });
-    }
-
-    function runFullGridOCR(canvas, center, boxW, boxH) {
-      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const spacingX = Math.round(boxW * 1.2);
-      const spacingY = Math.round(boxH * 1.2);
-
-      const grid = document.createElement("div");
-      grid.className = "input-grid";
-
-      let rowIndex = 0;
-      const promises = [];
-
-      pattern.forEach(count => {
-        const rowDiv = document.createElement("div");
-        rowDiv.className = "input-row";
-        const offsetY = (rowIndex - 5) * spacingY;
-        const startX = -((count - 1) / 2) * spacingX;
-
-        for (let col = 0; col < count; col++) {
-          const offsetX = startX + col * spacingX;
-          const cx = center.x + offsetX;
-          const cy = center.y + offsetY;
-
-          const patch = document.createElement("canvas");
-          patch.width = boxW;
-          patch.height = boxH;
-          const ctx = patch.getContext("2d");
-          ctx.drawImage(canvas, cx - boxW / 2, cy - boxH / 2, boxW, boxH, 0, 0, boxW, boxH);
-
-          const input = document.createElement("input");
-          input.type = "text";
-          rowDiv.appendChild(input);
-
-          const p = Tesseract.recognize(patch, 'eng', {
-            tessedit_char_whitelist: '<0123456789'
-          }).then(({ data }) => {
-            const match = data.text.trim().match(/<0|\d{1,2}/);
-            if (match) input.value = match[0];
-          });
-          promises.push(p);
-        }
-        rowIndex++;
-        grid.appendChild(rowDiv);
-      });
-
-      document.getElementById("output").innerHTML = "";
-      document.getElementById("output").appendChild(grid);
-      Promise.all(promises).then(() => console.log("✅ 全マスOCR完了"));
+      const cx = verticals.reduce((a, b) => a + b, 0) / verticals.length;
+      const cy = horizontals.reduce((a, b) => a + b, 0) / horizontals.length;
+      return { x: cx, y: cy };
     }
   </script>
 </body>
