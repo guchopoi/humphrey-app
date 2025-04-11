@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR：正確マス配置</title>
+  <title>視野検査OCR：正確マス配置（修正版）</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR マス対応配置</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched（位置マッチ）</p>
+  <h1>視野検査 OCR マス対応配置（修正版）</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched fix</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -77,7 +77,7 @@
             words.forEach(word => {
               const dx = Math.abs(word.x - pos.x);
               const dy = Math.abs(word.y - pos.y);
-              const score = dx + dy; // Manhattan距離でマスに最も近い文字
+              const score = dx + dy;
               if (score < minScore) {
                 minScore = score;
                 best = word;
@@ -86,7 +86,7 @@
             return best;
           });
 
-          renderImageGrid(matched, pattern);
+          renderImageGrid(matched, pattern, canvas);
         });
       };
       img.src = URL.createObjectURL(file);
@@ -130,7 +130,7 @@
       return { center: { x: centerX, y: centerY }, spacingX, spacingY };
     }
 
-    function renderImageGrid(matched, pattern) {
+    function renderImageGrid(matched, pattern, sourceCanvas) {
       const container = document.createElement("div");
       container.className = "input-grid";
 
@@ -147,7 +147,7 @@
           patch.width = w;
           patch.height = h;
           const ctx = patch.getContext("2d");
-          ctx.drawImage(document.querySelector("canvas"), word.x0, word.y0, w, h, 0, 0, w, h);
+          ctx.drawImage(sourceCanvas, word.x0, word.y0, w, h, 0, 0, w, h);
           row.appendChild(patch);
         }
         container.appendChild(row);
