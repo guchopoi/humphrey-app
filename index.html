@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR デバッグモード</title>
+  <title>視野検査OCR：中心距離順画像表示</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -17,19 +17,16 @@
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.1/dist/tesseract.min.js"></script>
   <style>
     body { font-family: sans-serif; padding: 20px; }
-    input[type="text"] { width: 40px; text-align: center; }
-    .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
-    .input-row { display: flex; gap: 4px; }
-    #debug { margin-top: 20px; font-size: 14px; color: #333; white-space: pre-wrap; background: #f4f4f4; padding: 10px; border-radius: 5px; }
+    .grid-preview { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 20px; }
+    .grid-preview canvas { border: 1px solid #ccc; width: 50px; height: 50px; image-rendering: pixelated; }
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR デバッグ</h1>
-  <p style="color: red;"><b>モード:</b> v2.0 debug - 全OCR出力を可視化</p>
+  <h1>視野検査 OCR中心距離順 画像化</h1>
+  <p style="color: green;"><b>バージョン:</b> v2.0 center-distance sort</p>
 
   <input type="file" id="imageInput" accept="image/*">
-  <div id="output"></div>
-  <div id="debug"></div>
+  <div id="gridPreview" class="grid-preview"></div>
 
   <script>
     document.getElementById("imageInput").addEventListener("change", function (event) {
@@ -39,7 +36,7 @@
       const img = new Image();
       img.onload = function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みがまだ完了していません。");
+          alert("OpenCV.js の読み込みがまだ完了していません。数秒お待ちください。");
           return;
         }
 
@@ -49,121 +46,66 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center, spacingX, spacingY, bounds } = detectBounds(canvas);
-        renderInputGrid();
+        const { center } = detectCenterOnly(canvas);
 
         Tesseract.recognize(canvas, 'eng').then(({ data }) => {
-          const debugOutput = data.words.map(w =>
-            `[${Math.round((w.bbox.x0 + w.bbox.x1)/2)}, ${Math.round((w.bbox.y0 + w.bbox.y1)/2)}] (${w.confidence}) → "${w.text.trim()}"`
-          ).join("\n");
-
-          document.getElementById("debug").innerText = "[全OCR出力]\n" + debugOutput;
-
           const words = data.words.map(w => ({
             text: w.text.trim(),
             x: (w.bbox.x0 + w.bbox.x1) / 2,
-            y: (w.bbox.y0 + w.bbox.y1) / 2
+            y: (w.bbox.y0 + w.bbox.y1) / 2,
+            x0: w.bbox.x0,
+            y0: w.bbox.y0,
+            x1: w.bbox.x1,
+            y1: w.bbox.y1
           }));
 
-          const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-          let positions = [];
-          pattern.forEach((count, row) => {
-            const offsetY = (row - 5) * spacingY;
-            const startX = -((count - 1) / 2) * spacingX;
-            for (let col = 0; col < count; col++) {
-              const offsetX = startX + col * spacingX;
-              positions.push({ row, col, x: center.x + offsetX, y: center.y + offsetY });
-            }
+          const sorted = words.sort((a, b) => {
+            const da = Math.hypot(a.x - center.x, a.y - center.y);
+            const db = Math.hypot(b.x - center.x, b.y - center.y);
+            return da - db;
           });
 
-          positions.forEach(({ row, col, x, y }) => {
-            let minDist = Infinity;
-            let value = "";
-            words.forEach(({ text, x: wx, y: wy }) => {
-              const dist = Math.hypot(wx - x, wy - y);
-              if (dist < minDist) {
-                minDist = dist;
-                value = cleanText(text);
-              }
-            });
-            const input = document.querySelector(`input[name='v_${row}_${col}']`);
-            if (input) input.value = value;
+          const previewContainer = document.getElementById("gridPreview");
+          previewContainer.innerHTML = "";
+
+          sorted.slice(0, 68).forEach(({ text, x0, y0, x1, y1 }) => {
+            const w = x1 - x0;
+            const h = y1 - y0;
+            const patchCanvas = document.createElement("canvas");
+            patchCanvas.width = w;
+            patchCanvas.height = h;
+            const patchCtx = patchCanvas.getContext("2d");
+            patchCtx.drawImage(canvas, x0, y0, w, h, 0, 0, w, h);
+            previewContainer.appendChild(patchCanvas);
           });
         });
       };
+
       img.src = URL.createObjectURL(file);
     });
 
-    function detectBounds(canvas) {
+    function detectCenterOnly(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
       const lines = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      cv.Canny(gray, 50, 150, 3, false);
+      cv.Canny(gray, edges, 50, 150, 3, false);
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
-      let verticalEdges = [], horizontalEdges = [];
       for (let i = 0; i < lines.rows; i++) {
         const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
-        if (Math.abs(x1 - x2) < 10) {
-          verticals.push((x1 + x2) / 2);
-          verticalEdges.push(x1, x2);
-        }
-        if (Math.abs(y1 - y2) < 10) {
-          horizontals.push((y1 + y2) / 2);
-          horizontalEdges.push(y1, y2);
-        }
+        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
+        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
       }
 
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
       const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
-      const minX = Math.min(...verticalEdges);
-      const maxX = Math.max(...verticalEdges);
-      const minY = Math.min(...horizontalEdges);
-      const maxY = Math.max(...horizontalEdges);
-      const spacingX = Math.round((maxX - minX) / 9);
-      const spacingY = Math.round((maxY - minY) / 9);
 
-      return {
-        center: { x: centerX, y: centerY },
-        spacingX,
-        spacingY,
-        bounds: {
-          left: minX - spacingX,
-          right: maxX + spacingX,
-          top: minY - spacingY,
-          bottom: maxY + spacingY
-        }
-      };
-    }
-
-    function cleanText(text) {
-      text = text.trim();
-      if (text === "<0") return text;
-      const match = text.match(/\d{1,2}/);
-      return match ? match[0] : "";
-    }
-
-    function renderInputGrid() {
-      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const container = document.createElement("div");
-      container.className = "input-grid";
-      pattern.forEach((count, row) => {
-        const rowDiv = document.createElement("div");
-        rowDiv.className = "input-row";
-        for (let col = 0; col < count; col++) {
-          const input = document.createElement("input");
-          input.type = "text";
-          input.name = `v_${row}_${col}`;
-          rowDiv.appendChild(input);
-        }
-        container.appendChild(rowDiv);
-      });
-      document.getElementById("output").appendChild(container);
+      return { center: { x: centerX, y: centerY } };
     }
   </script>
 </body>
