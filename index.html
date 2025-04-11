@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR：マス割り当て強化版</title>
+  <title>視野検査OCR v3.0 spacing-based</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -19,12 +19,12 @@
     body { font-family: sans-serif; padding: 20px; }
     .input-grid { display: flex; flex-direction: column; align-items: center; gap: 4px; margin-top: 20px; }
     .input-row { display: flex; gap: 4px; }
-    .input-row canvas { border: 1px solid #ccc; width: 50px; height: 50px; image-rendering: pixelated; }
+    .input-row input { width: 40px; height: 40px; text-align: center; font-size: 16px; }
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR マス対応配置（完全修正版）</h1>
-  <p style="color: green;"><b>バージョン:</b> v2.0 layout-matched unique+split</p>
+  <h1>視野検査 OCR spacing-based 切り出し</h1>
+  <p style="color: green;"><b>バージョン:</b> v3.0 spacing 相対配置OCR</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -37,7 +37,7 @@
       const img = new Image();
       img.onload = function () {
         if (!opencvReady) {
-          alert("OpenCV.js の読み込みがまだ完了していません。数秒お待ちください。");
+          alert("OpenCV.js の読み込みがまだ完了していません。");
           return;
         }
 
@@ -48,55 +48,7 @@
         ctx.drawImage(img, 0, 0);
 
         const { center, spacingX, spacingY } = detectCenterAndSpacing(canvas);
-
-        const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-        const positions = [];
-        pattern.forEach((count, row) => {
-          const offsetY = (row - 5) * spacingY;
-          const startX = -((count - 1) / 2) * spacingX;
-          for (let col = 0; col < count; col++) {
-            const offsetX = startX + col * spacingX;
-            positions.push({ row, col, x: center.x + offsetX, y: center.y + offsetY });
-          }
-        });
-
-        Tesseract.recognize(canvas, 'eng').then(({ data }) => {
-          const splitWords = [];
-          data.words.forEach(w => {
-            const parts = w.text.trim().split(/[^0-9<]+/).filter(p => /^\d{1,2}$|^<0$/.test(p));
-            parts.forEach(part => {
-              splitWords.push({
-                text: part,
-                x: (w.bbox.x0 + w.bbox.x1) / 2,
-                y: (w.bbox.y0 + w.bbox.y1) / 2,
-                x0: w.bbox.x0,
-                y0: w.bbox.y0,
-                x1: w.bbox.x1,
-                y1: w.bbox.y1
-              });
-            });
-          });
-
-          const used = new Set();
-          const matched = positions.map(pos => {
-            let best = null;
-            let minScore = Infinity;
-            splitWords.forEach((word, idx) => {
-              if (used.has(idx)) return;
-              const dx = Math.abs(word.x - pos.x);
-              const dy = Math.abs(word.y - pos.y);
-              const score = dx + dy;
-              if (score < minScore) {
-                minScore = score;
-                best = { word, idx };
-              }
-            });
-            if (best) used.add(best.idx);
-            return best ? best.word : null;
-          });
-
-          renderImageGrid(matched, pattern, canvas);
-        });
+        renderInputGrid(center, spacingX, spacingY, canvas);
       };
       img.src = URL.createObjectURL(file);
     });
@@ -139,34 +91,57 @@
       return { center: { x: centerX, y: centerY }, spacingX, spacingY };
     }
 
-    function renderImageGrid(matched, pattern, sourceCanvas) {
+    function renderInputGrid(center, spacingX, spacingY, sourceCanvas) {
+      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
       const container = document.createElement("div");
       container.className = "input-grid";
 
-      let index = 0;
-      pattern.forEach((count, rowIdx) => {
-        const row = document.createElement("div");
-        row.className = "input-row";
-        for (let colIdx = 0; colIdx < count; colIdx++) {
-          const word = matched[index++];
-          const patch = document.createElement("canvas");
-          patch.width = 50;
-          patch.height = 50;
-          const ctx = patch.getContext("2d");
-          if (word) {
-            const w = word.x1 - word.x0;
-            const h = word.y1 - word.y0;
-            ctx.drawImage(sourceCanvas, word.x0, word.y0, w, h, 0, 0, 50, 50);
-          } else {
-            ctx.fillStyle = "#eee";
-            ctx.fillRect(0, 0, 50, 50);
-          }
-          row.appendChild(patch);
+      let promises = [];
+      pattern.forEach((count, row) => {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "input-row";
+        const offsetY = (row - 5) * spacingY;
+        const startX = -((count - 1) / 2) * spacingX;
+        for (let col = 0; col < count; col++) {
+          const offsetX = startX + col * spacingX;
+          const cx = center.x + offsetX;
+          const cy = center.y + offsetY;
+
+          const patchCanvas = document.createElement("canvas");
+          const patchSize = Math.round(Math.min(spacingX, spacingY) * 0.8);
+          patchCanvas.width = patchCanvas.height = patchSize;
+          const patchCtx = patchCanvas.getContext("2d");
+          patchCtx.drawImage(
+            sourceCanvas,
+            cx - patchSize / 2,
+            cy - patchSize / 2,
+            patchSize,
+            patchSize,
+            0,
+            0,
+            patchSize,
+            patchSize
+          );
+
+          const input = document.createElement("input");
+          input.type = "text";
+          rowDiv.appendChild(input);
+
+          const p = Tesseract.recognize(patchCanvas, 'eng', {
+            tessedit_char_whitelist: '<0123456789'
+          }).then(({ data }) => {
+            const text = data.text.trim().match(/<0|\d{1,2}/);
+            if (text) input.value = text[0];
+          });
+          promises.push(p);
         }
-        container.appendChild(row);
+        container.appendChild(rowDiv);
       });
+
       document.getElementById("output").innerHTML = "";
       document.getElementById("output").appendChild(container);
+
+      Promise.all(promises).then(() => console.log("✅ 全OCR完了"));
     }
   </script>
 </body>
