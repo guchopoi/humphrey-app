@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR v3.1 adaptive-sizing</title>
+  <title>視野検査OCR v3.2 full-grid</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR adaptive sizing</h1>
-  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-sizing（中心OCR → サイズ自動調整）</p>
+  <h1>視野検査 OCR full-grid</h1>
+  <p style="color: green;"><b>バージョン:</b> v3.2 full-grid（推定サイズで全マスOCR）</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -121,8 +121,57 @@
         const avgH = Math.round(valid.reduce((sum, r) => sum + r.height, 0) / valid.length);
 
         console.log("📏 推定boxサイズ：", avgW, "×", avgH);
-        // 次のステップ：このサイズで各マスを切り出す処理へ
+        runFullGridOCR(canvas, center, avgW, avgH);
       });
+    }
+
+    function runFullGridOCR(canvas, center, boxW, boxH) {
+      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
+      const spacingX = Math.round(boxW * 1.2);
+      const spacingY = Math.round(boxH * 1.2);
+
+      const grid = document.createElement("div");
+      grid.className = "input-grid";
+
+      let rowIndex = 0;
+      const promises = [];
+
+      pattern.forEach(count => {
+        const rowDiv = document.createElement("div");
+        rowDiv.className = "input-row";
+        const offsetY = (rowIndex - 5) * spacingY;
+        const startX = -((count - 1) / 2) * spacingX;
+
+        for (let col = 0; col < count; col++) {
+          const offsetX = startX + col * spacingX;
+          const cx = center.x + offsetX;
+          const cy = center.y + offsetY;
+
+          const patch = document.createElement("canvas");
+          patch.width = boxW;
+          patch.height = boxH;
+          const ctx = patch.getContext("2d");
+          ctx.drawImage(canvas, cx - boxW / 2, cy - boxH / 2, boxW, boxH, 0, 0, boxW, boxH);
+
+          const input = document.createElement("input");
+          input.type = "text";
+          rowDiv.appendChild(input);
+
+          const p = Tesseract.recognize(patch, 'eng', {
+            tessedit_char_whitelist: '<0123456789'
+          }).then(({ data }) => {
+            const match = data.text.trim().match(/<0|\d{1,2}/);
+            if (match) input.value = match[0];
+          });
+          promises.push(p);
+        }
+        rowIndex++;
+        grid.appendChild(rowDiv);
+      });
+
+      document.getElementById("output").innerHTML = "";
+      document.getElementById("output").appendChild(grid);
+      Promise.all(promises).then(() => console.log("✅ 全マスOCR完了"));
     }
   </script>
 </body>
