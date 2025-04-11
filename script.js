@@ -2,76 +2,62 @@ document.getElementById("imageInput").addEventListener("change", function(event)
   const file = event.target.files[0];
   if (!file) return;
 
-  const img = document.createElement("img");
+  const img = new Image();
   img.src = URL.createObjectURL(file);
-  img.style.maxWidth = "300px";
+  img.onload = function () {
+    document.getElementById("output").innerHTML = "";
+    detectCrossCenter(img, ({ x, y }) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      ctx.fillStyle = "red";
+      ctx.beginPath();
+      ctx.arc(x, y, 10, 0, 2 * Math.PI);
+      ctx.fill();
 
-  const output = document.getElementById("output");
-  output.innerHTML = "画像読み込み中...<br>";
-  output.appendChild(img);
-
-  // OCR実行
-  Tesseract.recognize(
-    file,
-    'eng',
-    { logger: m => console.log(m) }
-  ).then(({ data }) => {
-    const cells = data.words.map(w => ({
-      text: w.text,
-      x: w.bbox.x0,
-      y: w.bbox.y0
-    }));
-
-    const grouped = groupByRows(cells);
-    const flatTexts = grouped
-      .map(row => row.sort((a, b) => a.x - b.x).map(w => w.text))
-      .flat();
-
-    const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-    const totalBoxes = pattern.reduce((a, b) => a + b, 0); // = 68
-    let i = 0;
-
-    const inputArea = document.createElement("div");
-    inputArea.style.display = "flex";
-    inputArea.style.flexDirection = "column";
-    inputArea.style.alignItems = "center";
-    inputArea.style.gap = "4px";
-
-    for (let row = 0; row < pattern.length; row++) {
-      const rowDiv = document.createElement("div");
-      rowDiv.style.display = "flex";
-      rowDiv.style.justifyContent = "center";
-      rowDiv.style.gap = "4px";
-
-      for (let col = 0; col < pattern[row]; col++) {
-        const input = document.createElement("input");
-        input.type = "text";
-        input.value = flatTexts[i] || "";
-        input.size = 3;
-        input.style.textAlign = "center";
-        input.name = `v_${row}_${col}`;
-        i++;
-        rowDiv.appendChild(input);
-      }
-
-      inputArea.appendChild(rowDiv);
-    }
-
-    output.innerHTML += "<hr><b>修正可能な視野データ（68点）：</b><br>";
-    output.appendChild(inputArea);
-  });
+      document.getElementById("output").appendChild(canvas);
+      document.getElementById("output").innerHTML += `<p>中央推定位置: (${x}, ${y})</p>`;
+    });
+  };
 });
 
-// Y座標で行分けする関数
-function groupByRows(cells) {
-  const rows = [];
-  const threshold = 12;
-  cells.forEach(cell => {
-    const row = rows.find(r => Math.abs(r[0].y - cell.y) < threshold);
-    if (row) row.push(cell);
-    else rows.push([cell]);
-  });
+// OpenCVで中央十字交点を検出
+function detectCrossCenter(imageElement, callback) {
+  const canvas = document.createElement('canvas');
+  canvas.width = imageElement.naturalWidth;
+  canvas.height = imageElement.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imageElement, 0, 0);
 
-  // 行のY位置順にソート
-  return rows.sort((a, b) => a[0].y - b[0].y);
+  const src = cv.imread(canvas);
+  const gray = new cv.Mat();
+  const edges = new cv.Mat();
+  const lines = new cv.Mat();
+
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+  cv.Canny(gray, edges, 50, 150, 3, false);
+  cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
+
+  let verticals = [];
+  let horizontals = [];
+
+  for (let i = 0; i < lines.rows; ++i) {
+    const [x1, y1, x2, y2] = lines.intPtr(i);
+    if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2); // 垂直線
+    if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2); // 水平線
+  }
+
+  const centerX = average(verticals);
+  const centerY = average(horizontals);
+
+  // メモリ解放
+  src.delete(); gray.delete(); edges.delete(); lines.delete();
+
+  callback({ x: Math.round(centerX), y: Math.round(centerY) });
+}
+
+function average(arr) {
+  return arr.reduce((a, b) => a + b, 0) / arr.length || 0;
 }
