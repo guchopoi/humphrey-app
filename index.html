@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR v3.0 spacing-based</title>
+  <title>視野検査OCR v3.1 adaptive-spacing</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR spacing-based 切り出し</h1>
-  <p style="color: green;"><b>バージョン:</b> v3.0 spacing 相対配置OCR</p>
+  <h1>視野検査 OCR adaptive spacing</h1>
+  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-spacing（中心OCRからspacing推定）</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -47,13 +47,13 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center, spacingX, spacingY } = detectCenterAndSpacing(canvas);
-        renderInputGrid(center, spacingX, spacingY, canvas);
+        const { center } = detectCenter(canvas);
+        estimateSpacingFromCenter(canvas, center);
       };
       img.src = URL.createObjectURL(file);
     });
 
-    function detectCenterAndSpacing(canvas) {
+    function detectCenter(canvas) {
       const src = cv.imread(canvas);
       const gray = new cv.Mat();
       const edges = new cv.Mat();
@@ -63,85 +63,56 @@
       cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 80, 100, 10);
 
       let verticals = [], horizontals = [];
-      let verticalEdges = [], horizontalEdges = [];
       for (let i = 0; i < lines.rows; i++) {
         const [x1, y1, x2, y2] = lines.data32S.slice(i * 4, i * 4 + 4);
-        if (Math.abs(x1 - x2) < 10) {
-          verticals.push((x1 + x2) / 2);
-          verticalEdges.push(x1, x2);
-        }
-        if (Math.abs(y1 - y2) < 10) {
-          horizontals.push((y1 + y2) / 2);
-          horizontalEdges.push(y1, y2);
-        }
+        if (Math.abs(x1 - x2) < 10) verticals.push((x1 + x2) / 2);
+        if (Math.abs(y1 - y2) < 10) horizontals.push((y1 + y2) / 2);
       }
-
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
       const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
-      const minX = Math.min(...verticalEdges);
-      const maxX = Math.max(...verticalEdges);
-      const minY = Math.min(...horizontalEdges);
-      const maxY = Math.max(...horizontalEdges);
-
-      const spacingX = Math.round((maxX - minX) / 9);
-      const spacingY = Math.round((maxY - minY) / 9);
-
-      return { center: { x: centerX, y: centerY }, spacingX, spacingY };
+      return { x: centerX, y: centerY };
     }
 
-    function renderInputGrid(center, spacingX, spacingY, sourceCanvas) {
-      const pattern = [2, 6, 8, 8, 10, 10, 8, 8, 6, 2];
-      const container = document.createElement("div");
-      container.className = "input-grid";
+    function estimateSpacingFromCenter(canvas, center) {
+      const offset = 40; // 仮のマスサイズ
+      const positions = [
+        { name: 'top', x: center.x, y: center.y - offset },
+        { name: 'bottom', x: center.x, y: center.y + offset },
+        { name: 'left', x: center.x - offset, y: center.y },
+        { name: 'right', x: center.x + offset, y: center.y }
+      ];
 
-      let promises = [];
-      pattern.forEach((count, row) => {
-        const rowDiv = document.createElement("div");
-        rowDiv.className = "input-row";
-        const offsetY = (row - 5) * spacingY;
-        const startX = -((count - 1) / 2) * spacingX;
-        for (let col = 0; col < count; col++) {
-          const offsetX = startX + col * spacingX;
-          const cx = center.x + offsetX;
-          const cy = center.y + offsetY;
+      const boxSize = 40;
+      const ocrPromises = positions.map(p => {
+        const patch = document.createElement("canvas");
+        patch.width = patch.height = boxSize;
+        const ctx = patch.getContext("2d");
+        ctx.drawImage(canvas, p.x - boxSize / 2, p.y - boxSize / 2, boxSize, boxSize, 0, 0, boxSize, boxSize);
 
-          const patchCanvas = document.createElement("canvas");
-          const patchSize = Math.round(Math.min(spacingX, spacingY) * 0.8);
-          patchCanvas.width = patchCanvas.height = patchSize;
-          const patchCtx = patchCanvas.getContext("2d");
-          patchCtx.drawImage(
-            sourceCanvas,
-            cx - patchSize / 2,
-            cy - patchSize / 2,
-            patchSize,
-            patchSize,
-            0,
-            0,
-            patchSize,
-            patchSize
-          );
-
-          const input = document.createElement("input");
-          input.type = "text";
-          rowDiv.appendChild(input);
-
-          const p = Tesseract.recognize(patchCanvas, 'eng', {
-            tessedit_char_whitelist: '<0123456789'
-          }).then(({ data }) => {
-            const text = data.text.trim().match(/<0|\d{1,2}/);
-            if (text) input.value = text[0];
-          });
-          promises.push(p);
-        }
-        container.appendChild(rowDiv);
+        return Tesseract.recognize(patch, 'eng', {
+          tessedit_char_whitelist: '<0123456789'
+        }).then(({ data }) => {
+          const text = data.text.trim().match(/<0|\d{1,2}/);
+          return { name: p.name, x: p.x, y: p.y, text: text ? text[0] : "" };
+        });
       });
 
-      document.getElementById("output").innerHTML = "";
-      document.getElementById("output").appendChild(container);
+      Promise.all(ocrPromises).then(results => {
+        const top = results.find(r => r.name === 'top');
+        const bottom = results.find(r => r.name === 'bottom');
+        const left = results.find(r => r.name === 'left');
+        const right = results.find(r => r.name === 'right');
 
-      Promise.all(promises).then(() => console.log("✅ 全OCR完了"));
+        const spacingY = bottom && top ? Math.abs(bottom.y - top.y) : 40;
+        const spacingX = right && left ? Math.abs(right.x - left.x) : 40;
+
+        console.log("🔍 spacingX:", spacingX, "spacingY:", spacingY);
+        console.log("🔠 OCR中央近く：", results.map(r => `${r.name}: ${r.text}`).join(", "));
+
+        // ここから68マス展開に進める（次ステップ）
+      });
     }
   </script>
 </body>
