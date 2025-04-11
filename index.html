@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>視野検査OCR v3.1 adaptive-spacing</title>
+  <title>視野検査OCR v3.1 adaptive-spacing fix</title>
   <script>
     let opencvReady = false;
     window.cv = window.cv || {};
@@ -23,8 +23,8 @@
   </style>
 </head>
 <body>
-  <h1>視野検査 OCR adaptive spacing</h1>
-  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-spacing（中心OCRからspacing推定）</p>
+  <h1>視野検査 OCR adaptive spacing（fix版）</h1>
+  <p style="color: green;"><b>バージョン:</b> v3.1 adaptive-spacing fix</p>
 
   <input type="file" id="imageInput" accept="image/*">
   <div id="output"></div>
@@ -47,8 +47,14 @@
         const ctx = canvas.getContext("2d");
         ctx.drawImage(img, 0, 0);
 
-        const { center } = detectCenter(canvas);
-        estimateSpacingFromCenter(canvas, center);
+        requestAnimationFrame(() => {
+          const center = detectCenter(canvas);
+          if (!center) {
+            alert("十字の中心が検出できませんでした。画像を確認してください。");
+            return;
+          }
+          estimateSpacingFromCenter(canvas, center);
+        });
       };
       img.src = URL.createObjectURL(file);
     });
@@ -70,13 +76,14 @@
       }
       src.delete(); gray.delete(); edges.delete(); lines.delete();
 
+      if (!verticals.length || !horizontals.length) return null;
       const centerX = Math.round(verticals.reduce((a, b) => a + b, 0) / verticals.length);
       const centerY = Math.round(horizontals.reduce((a, b) => a + b, 0) / horizontals.length);
       return { x: centerX, y: centerY };
     }
 
     function estimateSpacingFromCenter(canvas, center) {
-      const offset = 40; // 仮のマスサイズ
+      const offset = 40;
       const positions = [
         { name: 'top', x: center.x, y: center.y - offset },
         { name: 'bottom', x: center.x, y: center.y + offset },
@@ -111,7 +118,7 @@
         console.log("🔍 spacingX:", spacingX, "spacingY:", spacingY);
         console.log("🔠 OCR中央近く：", results.map(r => `${r.name}: ${r.text}`).join(", "));
 
-        // ここから68マス展開に進める（次ステップ）
+        // TODO: ここからマス展開処理を行う
       });
     }
   </script>
